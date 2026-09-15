@@ -25,40 +25,27 @@ Contenant un serveur Web, un serveur ftp tout deux avec un certificat TLS. Ainsi
 ## 2. La mise en place des deux VM
 ### 2.1 Vm serveur 
 - 32 Go de stockage
-<p align="center">
-  <img src="./images/image.png" width="600">
-</p>
+>
       
 - 2 GO de RAM
-<p align="center">
-  <img src="./images/RAM-vm.png" width="600">
-</p>
+
 
 - 2 vCPU
- <p align="center">
-  <img src="./images/vCPU.png" width="600">
-</p>
+
      
 - 2 cartes réseaux une lan et une wan
-  <p align="center">
-  <img src="./images/cartes-réseaux.png" width="600">
-</p>
+
 
 - VM en CLI
- <p align="center">
-  <img src="./images/Debian-cli.png" width="600">
-</p>
+
+
 
 ### 2.2 VM cliente
 - VM en GUI
 - 16 Go de stckage
-<p align="center">
-  <img src="./images/Stockage%20client.png" width="600">
-</p>  
+  
 - carte réseau sur le lan 
-<p align="center">
-  <img src="./images/client-lan.png" width="600">
-</p>  
+ 
 
 ##### Sur notre VM serveur ens37 est pour le LAN
 
