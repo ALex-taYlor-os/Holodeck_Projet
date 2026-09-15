@@ -1,6 +1,6 @@
 # Holodeck
 ## Sommaire
-1. [objectifs et contexte](#1--mise-en-place-des-vm)
+1. [Objectifs et contexte](#1--mise-en-place-des-vm)
 2. [Mise en place des VM](#2-la-mise-en-place-des-deux-vm)
 3. [Serveur DHCP et DNS](#3-configuration-dns-et-dhcp)
 4. [Serveur web](#4-mise-en-place-du-serveur-web)
@@ -8,9 +8,10 @@
 6. [PhpMyAdmin](#6-installation-de-PhpMYAdmin)
 7. [Cockpit](#7-installation-de-Cockpit)
 8. [LDAP](#8-LDAP)
-9. [ProFTPd](#9-ProFTPd)
+9.  [ProFTPd](#9-ProFTPd)
 10. [VisualStudioCode](#10-VisualStudioCode) 
 11. [Pare-feu UFW ](#11-Pare-feu-UFW)
+12. [CertificatTLS](#12-Genere-le-certificat-avec-mkcert)
 
 
 ## 1.  Mise en place des vm
@@ -59,6 +60,23 @@ Contenant un serveur Web, un serveur ftp tout deux avec un certificat TLS. Ainsi
   <img src="./images/client-lan.png" width="600">
 </p>  
 
+##### Sur notre VM serveur ens37 est pour le LAN
+
+>/etc/network/interfaces
+```
+allow-hotplug ens37 #reseau LAN
+iface ens37 inet static
+     address 192.168.50.1
+     netmask 255.255.255.0
+    
+```
+
+```bash
+ systemctl restart networking
+```
+
+
+
 ## 3. configuration DNS et DHCP
 ### 3.1 Configuration DHCP
 
@@ -81,18 +99,46 @@ subnet 192.168.10.0 netmask 255.255.255.0 {
 }
 ```
 ### 3.2 Serveur DNS 
+
+
+Installation de DNS
 ```bash
-apt install -y bind9 bind9utils
+apt install -y bind9 bind9utils dnsutils
 ```
-`/etc/bind/named.conf.local` :
-```
+
+
+>`/etc/bind/named.conf.local :
+
+
+```bash
 zone "starfleet.lan" {
     type master;
     file "/etc/bind/db.starfleet.lan";
 };
 ```
-Enregistrements A dans /etc/bind/db.starfleet.lan (ns, www8, www7, php, admin, vscore) pointant vers 192.168.10.1.
-`/etc/bind/db.starfleet.lan`
+
+### Faire ecouter bind9 sur ens34 (carte réseau LAN)
+>/etc/bind/named.conf.options
+
+```bash
+options {
+    directory "/var/cache/bind";
+
+    listen-on { 127.0.0.1; 192.168.50.1; };
+    allow-query { 127.0.0.1; 192.168.50.0/24; };
+
+    recursion yes;
+    forwarders {
+        8.8.8.8;
+    };
+};
+```
+
+Enregistrements A dans :
+>/etc/bind/db.starfleet.lan 
+
+(ns, www8, www7, php, admin, vscore) pointant vers 192.168.50.1. /etc/bind/db.starfleet.lan
+
 ```bash
 $TTL    604800
 @       IN      SOA     ns.starfleet.lan. admin.starfleet.lan. (
@@ -103,20 +149,61 @@ $TTL    604800
                          604800 )       ; Negative Cache TTL
 ;
 @               IN      NS      ns.starfleet.lan.
-ns              IN      A       192.168.10.1
-www8            IN      A       192.168.10.1
-www7            IN      A       192.168.10.1
-php             IN      A       192.168.10.1
-admin           IN      A       192.168.10.1
-vscore          IN      A       192.168.10.1
+ns              IN      A       192.168.2.1
+www8            IN      A       192.168.2.1
+www7            IN      A       192.168.2.1
+php             IN      A       192.168.2.1
+admin           IN      A       192.168.2.1
+vscore          IN      A       192.168.2.1
+ldap            IN      A       192.168.2.1
+
 ```
+
+
+```bash
+systemctl start bind9
+systemctl enable named.service
+systemctl status bind9
+```
+
 ## 4. Mise en place du serveur web
 ### 4.1 Installation de Nginx comme serveur web.
 
+
+Installation depuis le dépot officiel de nginx
 ```bash
-apt install -y wget gnupg2 ca-certificates lsb-release
-wget -qO - https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/debian $(lsb_release -cs) nginx" > /etc/apt/sources.list.d/nginx.list
+apt update
+apt install -y curl gnupg2 ca-certificates lsb-release debian-archive-keyring
+```
+
+
+Importer la clé GPG
+```bash
+curl https://nginx.org/keys/nginx_signing.key | gpg --dearmor | tee /usr/share/keyrings/nginx-archive-keyring.gpg >/dev/null
+```
+
+Ajout au dépôt officiel sur notre ordinateur 
+```bash
+echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/debian $(lsb_release -cs) nginx" | tee /etc/apt/sources.list.d/nginx.list
+```
+Epingler le dépôt (pas de melange avec la version Debian)
+```bash
+echo -e "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900" | tee /etc/apt/preferences.d/99nginx
+```
+Installation de nginx
+```bash
+apt install  nginx -y
+```
+Verifier que la version nginx est celle de nginx.org
+
+```bash
+nginx -v
+apt policy nginx #attendre un peuavant de lancer cette commande
+```
+Pour un demarrage automatique au lancement de du serveur 
+
+```bash
+systemctl enable nginx
 ```
 
 La racine du site se trouve dans 
@@ -139,49 +226,122 @@ Dossier qui contient les fichiers de configuration des sites actifs
 /etc/nginx/sites-enabled/
 ```
 
+Céation des sites web (à répéter pour ww7,ww8,php,admin) 
+```bash
+mkdir /var/www/www7.starfleet.lan
+```
+
+```bash
+chown -R www-data:www-data /var/www/www7.starfleet.lan
+```
+
+```bash
+chmod 755 /var/www/www7.starfleet.lan
+```
+
+```bash
+nano /var/www/www7.starfleet.lan/index.html
+```
+
+Contenu de notre page index.html
+```bash
+<html>
+<head></head>
+<body>
+<h1>Bienvenue sur 7StarFleet entreprise !</h1>
+</body>
+</html>
+```
+
+Création du fichier de configuration de notre site Internet
+```bash
+nano /etc/nginx/sites-available/www7.starfleet.lan
+```
+
+Configuration du siteweb
+```bash
+server {
+
+    listen 192.168.50.1:80;
+    listen [::]:80;
+
+    root /var/www/www7.starfleet.lan;
+
+    index index.html;
+    server_name www7.starfleet.lan;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+```
+
+REndre actif notre site par la création de lien symbolique
+````bash
+ln -s /etc/nginx/sites-available/www7.starfleet.lan /etc/nginx/sites-enabled/www7.starfleet.lan
+````
+
+Vérifier si la syntaxe est bonne dans nginx
+````
+nginx -t
+````
+
+On redémarre les services (on peut aussi utiliser start et stop)
+````
+systemctl restart nginx
+````
+
 ### 4.2 lancement de Nginx
 ```bash 
 systemctl start nginx
 ```
 ## 5. Mise en place de PHP 7 et 8
 ### 5.1 Installation des sources
-```bash
-mkdir -p /usr/src/php-build && cd /usr/src/php-build
-wget https://www.php.net/distributions/php-8.3.14.tar.gz
-wget https://museum.php.net/php7/php-7.4.33.tar.gz
-```
-### 5.2 Extraction des sources pour PHP 7
-```bash
-tar xzf php-7.4.33.tar.gz
-```
-### 5.3 Extraction des sources pour PHP 8
-```bash
-tar xzf php-8.3.14.tar.gz
-```
-### 5.4 Configuration de PHP 7
+````
+sudo apt-get update
+````
+Importation de la clé Sury 
 
->`cd php-7.4.33` 
-```bash
-./configure \
-  --prefix=/usr/local/php7.4 \
-  --with-config-file-path=/usr/local/php7.4/etc \
-  --enable-fpm \
-  --with-fpm-user=nginx \
-  --with-fpm-group=nginx \
-  --enable-mbstring \
-  --with-mysqli \
-  --with-pdo-mysql \
-  --with-ldap \
-  --with-openssl \
-  --with-zlib \
-  --with-curl \
-  --enable-opcache
-  ```
-  
- ```bash
- make -j$(nproc)
- make install`
- ```
+````
+curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php-archive-keyring.gpg
+````
+
+Ajout du dépôt 
+````
+echo "deb [signed-by=/usr/share/keyrings/sury-php-archive-keyring.gpg] https://packages.sury.org/php/ trixie main" > /etc/apt/sources.list.d/php.list
+````
+
+
+installation des versions 7.4 et 8.3
+
+````
+apt install php7.4-fpm php8.3-fpm
+````
+
+Modification de la configuration de notre site 
+>nano /etc/nginx/sites-available/www7.starfleet.lan
+
+Rajout du bloc : 
+````
+location ~ \.php$ {
+    include snippets/fastcgi-php.conf;
+    fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+}
+
+````
+On redémarre et on relance 
+````
+nginx -t
+systemctl restart nginx
+````
+
+Execution d'un script php  pour vérifier le bon fonctionnement de notre site 
+>nano /var/www/www7.starfleet.lan/info.php
+````
+<?php
+phpinfo(); 
+?>
+````
 
 
 ## 6.  Installation de PhpMYAdmin et MariaDb
@@ -832,3 +992,78 @@ ufw allow 389/tcp
 ufw allow 636/tcp     
 ````
 Les ports concernant cockpit et visual studio code sont fermés car passant par nginx.
+
+
+### 12 Genere le certificat avec mkcert
+
+````
+apt install libnss3-tools wget -y
+wget -O /usr/local/bin/mkcert https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64
+chmod +x /usr/local/bin/mkcert
+````
+Création du certificat 
+````
+mkcert -install
+````
+
+Pour localiser le fichier 
+````
+mkcert -CAROOT
+````
+
+Création du dossier pour le certif dans nginx
+````
+mkdir -p /etc/nginx/ssl
+cd /etc/nginx/ssl
+````
+````
+mkcert -cert-file starfleet.lan.crt -key-file starfleet.lan.key starfleet.lan "*.starfleet.lan" www8.starfleet.lan www7.starfleet.lan php.starfleet.lan admin.starfleet.lan vscore.starfleet.lan
+````
+
+Aller dans le dossier où ils ont été créé 
+````
+ls -la /etc/nginx/ssl/
+````
+````
+chmod 600 /etc/nginx/ssl/starfleet.lan.key
+chmod 644 /etc/nginx/ssl/starfleet.lan.crt
+````
+
+
+````
+curl -v https://www7.starfleet.lan
+````
+
+Envoi du certif à la VM cliente
+````
+scp "$(mkcert -CAROOT)/rootCA.pem" clientholodeck@192.168.50.70:/tmp/
+````
+
+Puis ajouter le certificat dans le navigateur internet de la vm Cliente (ici firefox) 
+````
+Paramètres -> Confidentialité et sécurité -> Certificats -> Afficher les certificats -> Autorités -> Importer
+````
+Fichier final 
+
+>nano /etc/nginx/sites-available/www7.starfleet.lan
+
+````
+server {
+
+
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    root /var/www/www7.starfleet.lan; index index.html;
+
+    server_name www7.starfleet.lan;
+
+    ssl_certificate /etc/nginx/ssl/starfleet.lan.crt;
+    ssl_certificate_key /etc/nginx/ssl/starfleet.lan.key;
+
+location  / {
+
+        try_files $uri $uri/ =404;
+                }
+}
+
+````
